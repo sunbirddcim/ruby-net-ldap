@@ -9,3 +9,4 @@ Gemfile.lock
 bin/
 .idea
 *.gem
+vendor/bundle
