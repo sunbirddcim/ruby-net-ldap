@@ -1,5 +1,5 @@
 module Net
   class LDAP
-    VERSION = "0.16.1-sunbirddcim.2"
+    VERSION = "0.19.0-sunbirddcim.0"
   end
 end

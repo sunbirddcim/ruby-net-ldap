@@ -490,7 +490,7 @@ class Net::LDAP::Filter
     when :eq
       if @right == "*" # presence test
         @left.to_s.to_ber_contextspecific(7)
-      elsif @right =~ /[*]/ # substring
+      elsif @right.to_s =~ /[*]/ # substring
         # Parsing substrings is a little tricky. We use String#split to
         # break a string into substrings delimited by the * (star)
         # character. But we also need to know whether there is a star at the
@@ -755,7 +755,7 @@ class Net::LDAP::Filter
     # This parses a given expression inside of parentheses.
     def parse_filter_branch(scanner)
       scanner.scan(/\s*/)
-      if token = scanner.scan(/[-\w:.]*[\w]/)
+      if token = scanner.scan(/[-\w:.;]*[\w]/)
         scanner.scan(/\s*/)
         if op = scanner.scan(/<=|>=|!=|:=|=/)
           scanner.scan(/\s*/)

@@ -17,20 +17,20 @@ module Net # :nodoc:
 end
 require 'socket'
 
-require 'net/ber'
-require 'net/ldap/pdu'
-require 'net/ldap/filter'
-require 'net/ldap/dataset'
-require 'net/ldap/dn'
-require 'net/ldap/password'
-require 'net/ldap/entry'
-require 'net/ldap/instrumentation'
-require 'net/ldap/connection'
-require 'net/ldap/version'
-require 'net/ldap/error'
-require 'net/ldap/auth_adapter'
-require 'net/ldap/auth_adapter/simple'
-require 'net/ldap/auth_adapter/sasl'
+require_relative 'ber'
+require_relative 'ldap/pdu'
+require_relative 'ldap/filter'
+require_relative 'ldap/dataset'
+require_relative 'ldap/dn'
+require_relative 'ldap/password'
+require_relative 'ldap/entry'
+require_relative 'ldap/instrumentation'
+require_relative 'ldap/connection'
+require_relative 'ldap/version'
+require_relative 'ldap/error'
+require_relative 'ldap/auth_adapter'
+require_relative 'ldap/auth_adapter/simple'
+require_relative 'ldap/auth_adapter/sasl'
 
 Net::LDAP::AuthAdapter.register([:simple, :anon, :anonymous], Net::LDAP::AuthAdapter::Simple)
 Net::LDAP::AuthAdapter.register(:sasl, Net::LDAP::AuthAdapter::Sasl)
@@ -413,7 +413,7 @@ class Net::LDAP
     ResultCodeStrongerAuthRequired         => "Stronger Auth Needed",
     ResultCodeReferral                     => "Referral",
     ResultCodeAdminLimitExceeded           => "Admin Limit Exceeded",
-    ResultCodeUnavailableCriticalExtension => "Unavailable crtical extension",
+    ResultCodeUnavailableCriticalExtension => "Unavailable critical extension",
     ResultCodeConfidentialityRequired      => "Confidentiality Required",
     ResultCodeSaslBindInProgress           => "saslBindInProgress",
     ResultCodeNoSuchAttribute              => "No Such Attribute",
@@ -481,6 +481,8 @@ class Net::LDAP
   #   server says it supports them. This is a fix for MS Active Directory
   # * :instrumentation_service => An object responsible for instrumenting
   #   operations, compatible with ActiveSupport::Notifications' public API.
+  # * :connect_timeout => The TCP socket timeout (in seconds) to use when
+  #   connecting to the LDAP server (default 5 seconds).
   # * :encryption => specifies the encryption to be used in communicating
   #   with the LDAP server. The value must be a Hash containing additional
   #   parameters, which consists of two keys:
@@ -713,7 +715,7 @@ class Net::LDAP
       begin
         @open_connection = new_connection
         payload[:connection] = @open_connection
-        payload[:bind]       = @open_connection.bind(@auth)
+        payload[:bind]       = @result = @open_connection.bind(@auth)
         yield self
       ensure
         @open_connection.close if @open_connection
@@ -1183,14 +1185,22 @@ class Net::LDAP
   # entries. This method sends an extra control code to tell the LDAP server
   # to do a tree delete. ('1.2.840.113556.1.4.805')
   #
+  # If the LDAP server does not support the DELETE_TREE control code, subordinate
+  # entries are deleted recursively instead.
+  #
   # Returns True or False to indicate whether the delete succeeded. Extended
   # status information is available by calling #get_operation_result.
   #
   #  dn = "mail=deleteme@example.com, ou=people, dc=example, dc=com"
   #  ldap.delete_tree :dn => dn
   def delete_tree(args)
-    delete(args.merge(:control_codes => [[Net::LDAP::LDAPControls::DELETE_TREE, true]]))
+    if search_root_dse[:supportedcontrol].include? Net::LDAP::LDAPControls::DELETE_TREE
+      delete(args.merge(:control_codes => [[Net::LDAP::LDAPControls::DELETE_TREE, true]]))
+    else
+      recursive_delete(args)
+    end
   end
+
   # This method is experimental and subject to change. Return the rootDSE
   # record from the LDAP server as a Net::LDAP::Entry, or an empty Entry if
   # the server doesn't return the record.
@@ -1321,7 +1331,7 @@ class Net::LDAP
     # Force connect to see if there's a connection error
     connection.socket
     connection
-  rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, Net::LDAP::ConnectionRefusedError => e
+  rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
     @result = {
       :resultCode   => 52,
       :errorMessage => ResultStrings[ResultCodeUnavailable],
@@ -1339,6 +1349,21 @@ class Net::LDAP
     when :simple_tls, :start_tls
       { :method => method, :tls_options => {} }
     end
+  end
+
+  # Recursively delete a dn and it's subordinate children.
+  # This is useful when a server does not support the DELETE_TREE control code.
+  def recursive_delete(args)
+    raise EmptyDNError unless args.is_a?(Hash) && args.key?(:dn)
+    # Delete Children
+    search(base: args[:dn], scope: Net::LDAP::SearchScope_SingleLevel) do |entry|
+      recursive_delete(dn: entry.dn)
+    end
+    # Delete Self
+    unless delete(dn: args[:dn])
+      raise Net::LDAP::Error, get_operation_result[:error_message].to_s
+    end
+    true
   end
 
 end # class LDAP
