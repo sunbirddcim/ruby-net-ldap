@@ -30,12 +30,12 @@ class Net::LDAP::Connection #:nodoc:
     @socket_class = socket_class
   end
 
-  def prepare_socket(server, timeout=nil)
+  def prepare_socket(server, timeout=nil, hostname='127.0.0.1')
     socket = server[:socket]
     encryption = server[:encryption]
 
     @conn = socket
-    setup_encryption(encryption, timeout) if encryption
+    setup_encryption(encryption, timeout, hostname) if encryption
   end
 
   def open_connection(server)
@@ -50,7 +50,7 @@ class Net::LDAP::Connection #:nodoc:
     errors = []
     hosts.each do |host, port|
       begin
-        prepare_socket(server.merge(socket: @socket_class.new(host, port, socket_opts)), timeout)
+        prepare_socket(server.merge(socket: @socket_class.new(host, port, socket_opts)), timeout, host)
         if encryption
           if encryption[:tls_options] &&
              encryption[:tls_options][:verify_mode] &&
@@ -74,7 +74,8 @@ class Net::LDAP::Connection #:nodoc:
 
   module GetbyteForSSLSocket
     def getbyte
-      getc.ord
+      c = getc
+      c && c.ord
     end
   end
 
@@ -85,7 +86,7 @@ class Net::LDAP::Connection #:nodoc:
     end
   end
 
-  def self.wrap_with_ssl(io, tls_options = {}, timeout=nil)
+  def self.wrap_with_ssl(io, tls_options = {}, timeout=nil, hostname=nil)
     raise Net::LDAP::NoOpenSSLError, "OpenSSL is unavailable" unless Net::LDAP::HasOpenSSL
 
     ctx = OpenSSL::SSL::SSLContext.new
@@ -95,6 +96,7 @@ class Net::LDAP::Connection #:nodoc:
     ctx.set_params(tls_options) unless tls_options.empty?
 
     conn = OpenSSL::SSL::SSLSocket.new(io, ctx)
+    conn.hostname = hostname
 
     begin
       if timeout
@@ -147,11 +149,11 @@ class Net::LDAP::Connection #:nodoc:
   # communications, as with simple_tls. Thanks for Kouhei Sutou for
   # generously contributing the :start_tls path.
   #++
-  def setup_encryption(args, timeout=nil)
+  def setup_encryption(args, timeout=nil, hostname=nil)
     args[:tls_options] ||= {}
     case args[:method]
     when :simple_tls
-      @conn = self.class.wrap_with_ssl(@conn, args[:tls_options], timeout)
+      @conn = self.class.wrap_with_ssl(@conn, args[:tls_options], timeout, hostname)
       # additional branches requiring server validation and peer certs, etc.
       # go here.
     when :start_tls
@@ -169,7 +171,7 @@ class Net::LDAP::Connection #:nodoc:
 
       raise Net::LDAP::StartTLSError,
             "start_tls failed: #{pdu.result_code}" unless pdu.result_code.zero?
-      @conn = self.class.wrap_with_ssl(@conn, args[:tls_options], timeout)
+      @conn = self.class.wrap_with_ssl(@conn, args[:tls_options], timeout, hostname)
     else
       raise Net::LDAP::EncMethodUnsupportedError, "unsupported encryption method #{args[:method]}"
     end
@@ -181,7 +183,7 @@ class Net::LDAP::Connection #:nodoc:
   # have to call it, but perhaps it will come in handy someday.
   #++
   def close
-    return if @conn.nil?
+    return if !defined?(@conn) || @conn.nil?
     @conn.close
     @conn = nil
   end
@@ -300,7 +302,7 @@ class Net::LDAP::Connection #:nodoc:
       control[2] = (control[2] == true).to_ber
       control.to_ber_sequence
     end
-    sort_control = [
+    [
       Net::LDAP::LDAPControls::SORT_REQUEST.to_ber,
       false.to_ber,
       sort_control_values.to_ber_sequence.to_s.to_ber,
@@ -422,6 +424,7 @@ class Net::LDAP::Connection #:nodoc:
         # this breaks when calling to_ber. (Can't force binary data to UTF-8)
         # we have to disable paging (even though server supports it) to get around this...
 
+        user_controls = args.fetch(:controls, [])
         controls = []
         controls <<
           [
@@ -431,7 +434,12 @@ class Net::LDAP::Connection #:nodoc:
             rfc2696_cookie.map(&:to_ber).to_ber_sequence.to_s.to_ber,
           ].to_ber_sequence if paged
         controls << ber_sort if ber_sort
-        controls = controls.empty? ? nil : controls.to_ber_contextspecific(0)
+        if controls.empty? && user_controls.empty?
+          controls = nil
+        else
+          controls += user_controls
+          controls = controls.to_ber_contextspecific(0)
+        end
 
         write(request, controls, message_id)
 
@@ -610,7 +618,7 @@ class Net::LDAP::Connection #:nodoc:
     pdu = queued_read(message_id)
 
     if !pdu || pdu.app_tag != Net::LDAP::PDU::ExtendedResponse
-      raise Net::LDAP::ResponseMissingError, "response missing or invalid"
+      raise Net::LDAP::ResponseMissingOrInvalidError, "response missing or invalid"
     end
 
     pdu
@@ -690,7 +698,7 @@ class Net::LDAP::Connection #:nodoc:
   #
   # Typically a TCPSocket, but can be a OpenSSL::SSL::SSLSocket
   def socket
-    return @conn if defined? @conn
+    return @conn if defined?(@conn) && !@conn.nil?
 
     # First refactoring uses the existing methods open_connection and
     # prepare_socket to set @conn. Next cleanup would centralize connection
@@ -710,7 +718,7 @@ class Net::LDAP::Connection #:nodoc:
   # Wrap around Socket.tcp to normalize with other Socket initializers
   class DefaultSocket
     def self.new(host, port, socket_opts = {})
-      Socket.tcp(host, port, socket_opts)
+      Socket.tcp(host, port, **socket_opts)
     end
   end
 end # class Connection

@@ -8,7 +8,7 @@ class TestBERIntegration < LDAPIntegrationTestCase
     attrs = [:dn, :uid, :cn, :mail]
 
     assert types_entry = @ldap.search(
-      base: "dc=rubyldap,dc=com",
+      base: "dc=example,dc=org",
       filter: "(uid=user1)",
       size: 1,
       attributes: attrs,
@@ -25,6 +25,6 @@ class TestBERIntegration < LDAPIntegrationTestCase
     end
 
     assert_includes Net::LDAP::ResultCodesSearchSuccess,
-      @ldap.get_operation_result.code, "should be a successful search operation"
+                    @ldap.get_operation_result.code, "should be a successful search operation"
   end
 end

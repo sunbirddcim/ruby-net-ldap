@@ -7,3 +7,6 @@ publish/
 Gemfile.lock
 .bundle
 bin/
+.idea
+*.gem
+vendor/bundle
