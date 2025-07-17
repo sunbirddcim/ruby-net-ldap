@@ -81,7 +81,7 @@ class Net::LDAP::Dataset < Hash
   # compatible with both 1.8.6 and 1.8.7.
   def value_is_binary?(value) # :nodoc:
     value = value.to_s
-    return true if value[0] == ?: or value[0] == ?<
+    return true if [?:, ?<].include?(value[0])
     value.each_byte { |byte| return true if (byte < 32) || (byte > 126) }
     false
   end
